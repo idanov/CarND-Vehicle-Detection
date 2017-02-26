@@ -1,32 +1,7 @@
 from sklearn.model_selection import train_test_split
 from random import shuffle
-from image_helpers import img_load, img_convert, single_img_features
 import numpy as np
 import glob
-
-
-# Define a function to extract features from a list of images
-# Have this function call single_img_features()
-def extract_features(img_list, color_space='RGB', spatial_size=(32, 32),
-                     hist_bins=32, orient=9,
-                     pix_per_cell=8, cell_per_block=2, hog_channel=0,
-                     spatial_feat=True, hist_feat=True, hog_feat=True):
-    # Create a list to append feature vectors to
-    features = []
-    # Iterate through the list of images
-    for file in img_list:
-        # Read in each one by one
-        image = img_load(file)
-        # apply color conversion if other than 'RGB'
-        image = img_convert(image, color_space)
-        file_features = single_img_features(image, spatial_size,
-                                            hist_bins, orient,
-                                            pix_per_cell, cell_per_block, hog_channel,
-                                            spatial_feat, hist_feat, hog_feat
-                                            )
-        features.append(file_features)
-    # Return list of feature vectors
-    return features
 
 
 def split_data(data, test_size, random=True):
@@ -39,7 +14,7 @@ def split_data(data, test_size, random=True):
     return data_train, data_test
 
 
-def load_vehicle_data(data_dir, test_size=0.2, verbose=True):
+def load_vehicle_lists(data_dir, test_size=0.2, verbose=True):
     # Get all non-car images (they could safely be shuffled)
     non_car = glob.glob(data_dir + '/non-vehicles/**/*.png')
     non_car_train_list, non_car_test_list = split_data(non_car, test_size=test_size)
