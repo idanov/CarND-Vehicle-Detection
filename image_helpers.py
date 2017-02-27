@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 from skimage.feature import hog
+from cv2 import HOGDescriptor
 
 
 # Define a function for loading images as RGB
@@ -30,7 +31,7 @@ def img_convert(image, color_space='RGB'):
 
 
 # Define a function to return HOG features and visualization (if requested)
-def get_hog_features(img, orient, pix_per_cell, cell_per_block, vis=False, feature_vec=True):
+def get_hog_features(img, orient, pix_per_cell, cell_per_block, vis=False, feature_vec=True, fast=False):
     # Call with two outputs if vis==True
     if vis:
         features, hog_image = hog(img, orientations=orient,
@@ -40,6 +41,19 @@ def get_hog_features(img, orient, pix_per_cell, cell_per_block, vis=False, featu
                                   visualise=vis, feature_vector=feature_vec)
         return features, hog_image
     # Otherwise call with one output
+    elif fast:
+        w = img.shape[0]
+        h = img.shape[1]
+        cell_size = (pix_per_cell, pix_per_cell)
+        block_size = (pix_per_cell * cell_per_block, pix_per_cell * cell_per_block)
+        block_stride = (pix_per_cell, pix_per_cell)
+        opencv_hog = HOGDescriptor((w, h), block_size, block_stride, cell_size, orient)
+        features = opencv_hog.compute(img)
+        if not feature_vec:
+            new_shape = ((w - block_size[0]) // block_stride[0] + 1,
+                         (h - block_size[1]) // block_stride[1] + 1, cell_per_block, cell_per_block, orient)
+            features = features.reshape(new_shape)
+        return features
     else:
         features = hog(img, orientations=orient,
                        pixels_per_cell=(pix_per_cell, pix_per_cell),
@@ -50,18 +64,18 @@ def get_hog_features(img, orient, pix_per_cell, cell_per_block, vis=False, featu
 
 
 # Define a helper function to take hog features for specified image channels
-def img_hog_features(feature_image, orient, pix_per_cell, cell_per_block, hog_channel=0):
+def img_hog_features(feature_image, orient, pix_per_cell, cell_per_block, hog_channel=0, feature_vec=True, fast=False):
     if hog_channel == 'ALL':
         features = []
         for channel in range(feature_image.shape[2]):
             hog_features = get_hog_features(feature_image[:, :, channel],
                                             orient, pix_per_cell, cell_per_block,
-                                            vis=False, feature_vec=False)
+                                            vis=False, feature_vec=feature_vec, fast=fast)
             features.append(np.expand_dims(hog_features, axis=-1))
     else:
         hog_features = get_hog_features(feature_image[:, :, hog_channel],
                                         orient, pix_per_cell, cell_per_block,
-                                        vis=False, feature_vec=False)
+                                        vis=False, feature_vec=feature_vec, fast=fast)
         features = [np.expand_dims(hog_features, axis=-1)]
     return np.concatenate(features, axis=-1)
 
@@ -90,7 +104,7 @@ def color_hist(img, nbins=32, bins_range=(0, 256)):
 def single_img_features(img, spatial_size=(32, 32),
                         hist_bins=32, orient=9,
                         pix_per_cell=8, cell_per_block=2, hog_channel=0,
-                        spatial_feat=True, hist_feat=True, hog_feat=True):
+                        spatial_feat=True, hist_feat=True, hog_feat=True, fast=True):
     # 1) Define an empty list to receive features
     img_features = []
     # 3) Compute spatial features if flag is set
@@ -106,7 +120,8 @@ def single_img_features(img, spatial_size=(32, 32),
     # 7) Compute HOG features if flag is set
     if hog_feat:
         hog_features = img_hog_features(img, orient=orient, pix_per_cell=pix_per_cell,
-                                        cell_per_block=cell_per_block, hog_channel=hog_channel)
+                                        cell_per_block=cell_per_block, hog_channel=hog_channel,
+                                        feature_vec=True, fast=fast)
         # 8) Append features to list
         img_features.append(hog_features.ravel())
 

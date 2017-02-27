@@ -10,7 +10,7 @@ from image_helpers import single_img_features, img_convert, img_hog_features, im
 class CarDetector:
     def __init__(self, color_space='HLS', spatial_size=(16, 16), hist_bins=32,
                  orient=9, pix_per_cell=8, cell_per_block=2, hog_channel='ALL',
-                 spatial_feat=True, hist_feat=True, hog_feat=True):
+                 spatial_feat=True, hist_feat=True, hog_feat=True, fast=False):
         self.__color_space = color_space
         self.__spatial_size = spatial_size
         self.__hist_bins = hist_bins
@@ -23,6 +23,7 @@ class CarDetector:
         self.__hog_feat = hog_feat
         self.__feature_scaler = None
         self.__model = None
+        self.__fast = fast
 
     def __extract_features(self, img_list):
         # Create a list to append feature vectors to
@@ -36,7 +37,7 @@ class CarDetector:
             file_features = single_img_features(image, self.__spatial_size,
                                                 self.__hist_bins, self.__orient,
                                                 self.__pix_per_cell, self.__cell_per_block, self.__hog_channel,
-                                                self.__spatial_feat, self.__hist_feat, self.__hog_feat
+                                                self.__spatial_feat, self.__hist_feat, self.__hog_feat, self.__fast
                                                 )
             features.append(file_features)
         # Return list of feature vectors
@@ -61,7 +62,7 @@ class CarDetector:
         # Check the training time for the SVC
         t1 = time.time()
         # Use a linear SVC
-        self.__model = LinearSVC()
+        self.__model = LinearSVC(dual=False)
         self.__model.fit(X_train, y_train)
         t2 = time.time()
         print(round(t2 - t1, 2), 'seconds to train SVC...')
@@ -80,7 +81,7 @@ class CarDetector:
     # window size (x and y dimensions),
     # and step size (for both x and y)
     @staticmethod
-    def __slide_window(x_start_stop, y_start_stop, xy_window, xy_step):
+    def slide_window(x_start_stop, y_start_stop, xy_window, xy_step):
         x_start = x_start_stop[0]
         x_stop = x_start_stop[1] - xy_window[0]
         y_start = y_start_stop[0]
@@ -113,12 +114,14 @@ class CarDetector:
         # 4) Resize image for calculating hog
         img_to_hog = img.copy()
         if scale != 1:
-            w = int(img.shape[1] / scale)
-            h = int(img.shape[0] / scale)
+            w = int(((img.shape[1] / scale) // self.__pix_per_cell) * self.__pix_per_cell)
+            h = int(((img.shape[0] / scale) // self.__pix_per_cell) * self.__pix_per_cell)
             img_to_hog = cv2.resize(img, (w, h))
         # 5) Calculate hog over the region of interest
-        hog_image = img_hog_features(img_to_hog, orient=self.__orient, pix_per_cell=self.__pix_per_cell,
-                                     cell_per_block=self.__cell_per_block, hog_channel=self.__hog_channel)
+        if not self.__fast:
+            hog_image = img_hog_features(img_to_hog, orient=self.__orient, pix_per_cell=self.__pix_per_cell,
+                                         cell_per_block=self.__cell_per_block, hog_channel=self.__hog_channel,
+                                         feature_vec=False, fast=False)
         # 6) Create an empty list to receive positive detection windows
         on_windows = []
         # 7) Iterate over all windows in the list
@@ -128,10 +131,11 @@ class CarDetector:
             # 9) Extract features for that window using single_img_features()
             features = single_img_features(test_img,
                                            spatial_size=self.__spatial_size, hist_bins=self.__hist_bins,
-                                           hog_channel=self.__hog_channel,
-                                           spatial_feat=self.__spatial_feat, hist_feat=self.__hist_feat, hog_feat=False)
+                                           orient=self.__orient, pix_per_cell=self.__pix_per_cell,
+                                           cell_per_block=self.__cell_per_block, hog_channel=self.__hog_channel,
+                                           spatial_feat=self.__spatial_feat, hist_feat=self.__hist_feat, hog_feat=self.__fast)
             # 10) Extract hog features for that window
-            if self.__hog_feat:
+            if self.__hog_feat and not self.__fast:
                 # carefully convert real image coordinates to hog indices
                 to_hog = lambda x: int(((x + 1) / scale) // self.__pix_per_cell)
                 hog_roi = hog_image[to_hog(tl[1] - ytop):to_hog(tl[1] - ytop) + cell_per_window,
@@ -147,18 +151,18 @@ class CarDetector:
         # 14) Return windows for positive detections
         return on_windows
 
-    def detect_cars(self, image, win_sizes, ytop=0, ybottom=720):
+    def detect_cars(self, image, win_sizes, ytop=0):
         assert self.__model is not None, "A model should be trained first using self.train_model()"
         all_bounding_boxes = []
-        for win_size, blocks_per_step in win_sizes:
+        for win_size, blocks_per_step, ybottom in win_sizes:
             # Calculate the hog cell size in a non-scaled image
             # There are (64 / pix_per_cell) number of cells in a 64px image,
             # So before resizing the window, a hog cell will have hog_cell_size pixels
             hog_cell_size = (self.__pix_per_cell * win_size) // 64
             step = blocks_per_step * hog_cell_size
             # Calculate sliding windows with a step, multiple of the hog cell size
-            windows = self.__slide_window(x_start_stop=(0, 1280), y_start_stop=(ytop, ybottom),
-                                          xy_window=(win_size, win_size), xy_step=(step, step))
+            windows = self.slide_window(x_start_stop=(0, 1280), y_start_stop=(ytop, ybottom),
+                                        xy_window=(win_size, win_size), xy_step=(step, step))
             # Find bounding boxes
             bounding_boxes = self.__search_windows(image, windows, ytop=ytop, ybottom=ybottom, window_size=win_size)
             all_bounding_boxes.extend(bounding_boxes)
@@ -195,8 +199,9 @@ def apply_threshold(heatmap, threshold):
     return heatmap
 
 
-def draw_labeled_bboxes(img, labels):
+def labeled_bboxes(labels):
     # Iterate through all detected cars
+    bboxes = []
     for car_number in range(1, labels[1] + 1):
         # Find pixels with each car_number label value
         nonzero = (labels[0] == car_number).nonzero()
@@ -205,7 +210,6 @@ def draw_labeled_bboxes(img, labels):
         nonzerox = np.array(nonzero[1])
         # Define a bounding box based on min/max x and y
         bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
-        # Draw the box on the image
-        cv2.rectangle(img, bbox[0], bbox[1], (0, 0, 255), 6)
+        bboxes.append(bbox)
     # Return the image
-    return img
+    return bboxes
